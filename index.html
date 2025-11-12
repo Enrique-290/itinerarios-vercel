@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Neural Travel Itinerario — Separar por pasajero</title>
+  <meta name="description" content="Sube uno o varios PDFs de itinerarios grupales y descarga un ZIP con un PDF por pasajero.">
+  <style>
+    :root{--ink:#0b1220;--muted:#f3f4f6;--line:#e5e7eb;--accent:#0d6efd}
+    *{box-sizing:border-box;font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Arial}
+    body{margin:0;background:#fff;color:var(--ink)}
+    header{position:sticky;top:0;background:#fff;border-bottom:1px solid var(--line)}
+    .wrap{max-width:1100px;margin:0 auto;padding:16px}
+    h1{margin:0;font-size:18px}
+    .card{border:1px solid var(--line);border-radius:14px;padding:16px;box-shadow:0 1px 2px rgba(0,0,0,.04)}
+    .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+    label.btn,.btn{display:inline-flex;align-items:center;gap:.6rem;background:var(--accent);color:#fff;padding:.7rem 1rem;border-radius:10px;cursor:pointer;border:none}
+    input[type=file]{display:none}
+    .muted{color:#6b7280;font-size:.92rem}
+    pre{background:var(--muted);padding:.75rem;border-radius:10px;max-height:250px;overflow:auto;margin:0}
+    .grid{display:grid;gap:14px;grid-template-columns:1fr 1fr}
+    .list{min-height:48px;border:1px dashed var(--line);border-radius:10px;padding:8px;overflow:auto;max-height:210px}
+    .pill{display:inline-block;background:#eef2ff;color:#3730a3;border:1px solid #c7d2fe;padding:.25rem .5rem;border-radius:999px;font-size:.8rem;margin:.15rem}
+    textarea{width:100%;min-height:120px;border:1px solid var(--line);border-radius:10px;padding:.6rem}
+    .section{margin-top:14px}
+    .ghost{background:#4b5563}
+    footer{padding:26px 16px;color:#6b7280;text-align:center}
+    .hr{height:1px;background:var(--line);margin:12px 0}
+    .mini{font-size:.8rem;color:#6b7280}
+  </style>
+</head>
+<body>
+<header>
+  <div class="wrap">
+    <h1>Neural Travel Itinerario — Separar por pasajero</h1>
+    <div class="muted">Sube <b>uno o varios PDFs</b> (Aeroméxico). Detecta cada pasajero y descarga un <b>ZIP</b> con un PDF por pasajero.</div>
+  </div>
+</header>
+
+<main class="wrap">
+  <div class="card">
+    <div class="row" style="justify-content:space-between">
+      <div class="row">
+        <label class="btn">
+          <span>📄 Subir PDF(s)</span>
+          <input id="pdfs" type="file" accept="application/pdf" multiple />
+        </label>
+        <label class="btn ghost">
+          <span>🖼️ Logo (opcional, PNG/JPG)</span>
+          <input id="logo" type="file" accept="image/png,image/jpeg" />
+        </label>
+        <button id="run" class="btn" disabled>⚙️ Generar ZIP por pasajero</button>
+      </div>
+      <div class="muted">Si en móvil no lee el PDF, usa “Pegar texto”.</div>
+    </div>
+
+    <div class="section grid">
+      <div>
+        <div class="muted">Estado</div>
+        <pre id="log">Esperando archivos…</pre>
+      </div>
+      <div>
+        <div class="muted">Pasajeros detectados</div>
+        <div id="names" class="list">—</div>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="muted">Preferencias</div>
+      <div class="row">
+        <label class="row" style="gap:6px">
+          <input id="letter" type="checkbox" checked />
+          <span>Formato carta (Letter)</span>
+        </label>
+        <label class="row" style="gap:6px">
+          <input id="exact" type="checkbox" />
+          <span>Clon visual detallado (banda azul, cajas, logo)</span>
+        </label>
+        <span class="mini">Sube tu logo para usarlo en la plantilla.</span>
+      </div>
+    </div>
+
+    <div class="hr"></div>
+
+    <div class="section">
+      <div class="muted">📝 Modo pegar texto (respaldo)</div>
+      <textarea id="raw" placeholder="Pega aquí el texto del PDF si tu visor bloquea los archivos en móvil…"></textarea>
+      <div class="row" style="margin-top:8px">
+        <button id="parseRaw" class="btn ghost">🔍 Detectar desde texto</button>
+        <button id="genFromRaw" class="btn" disabled>⚙️ Generar ZIP desde texto</button>
+      </div>
+    </div>
+  </div>
+</main>
+
+<footer>
+  v2 — Cliente puro, listo para Vercel. No guarda datos.
+</footer>
+
+<!-- Librerías desde CDN -->
+<script src="https://unpkg.com/pdfjs-dist@4.7.76/build/pdf.min.js"></script>
+<script src="https://unpkg.com/pdfjs-dist@4.7.76/build/pdf.worker.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/file-saver@2.0.5/dist/FileSaver.min.js"></script>
+
+<script>
+const logEl = document.getElementById('log');
+const namesEl = document.getElementById('names');
+const pdfsEl = document.getElementById('pdfs');
+const logoEl = document.getElementById('logo');
+const runEl = document.getElementById('run');
+const rawTA = document.getElementById('raw');
+const parseRawBtn = document.getElementById('parseRaw');
+const genFromRawBtn = document.getElementById('genFromRaw');
+const letterEl = document.getElementById('letter');
+const exactEl = document.getElementById('exact');
+
+const pdfjsLib = window['pdfjs-dist/build/pdf'];
+pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://unpkg.com/pdfjs-dist@4.7.76/build/pdf.worker.min.js';
+
+let PDF_TEXTS = [];
+let LOGO_DATA = null;
+let LAST_DATA = null;
+
+function set(msg){ logEl.textContent = msg; }
+function log(msg){ logEl.textContent += "\\n" + msg; logEl.scrollTop = logEl.scrollHeight; }
+
+logoEl.addEventListener('change', async (e)=>{
+  const f = e.target.files[0];
+  LOGO_DATA = f ? await f.arrayBuffer() : null;
+  if(LOGO_DATA) log("Logo cargado.");
+});
+
+async function readPdfText(file){
+  const arrayBuffer = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({data: arrayBuffer}).promise;
+  let full = "";
+  for (let p=1; p<=pdf.numPages; p++){
+    const page = await pdf.getPage(p);
+    const content = await page.getTextContent();
+    const strings = content.items.map(it => it.str);
+    full += strings.join("\\n") + "\\n";
+  }
+  return full;
+}
+
+function extractData(text){
+  let t = (text||"").replace(/[\u00A0]/g,' ').replace(/[ \t]+/g,' ').trim();
+  const pnr = (t.match(/CÓDIGO DE RESERVACI[ÓO]N\s+([A-Z0-9]{5,7})/i)||[])[1] || "";
+  const fltNums = Array.from(new Set((t.match(/AM\s?[0-9]{3,4}/g)||[]).map(s=>s.replace(/\s+/g,' '))));
+
+  function findFlightInfo(fltStr){
+    const r = new RegExp(fltStr.replace(' ','[\\s\\u00A0]?') + "[\\s\\S]*?Sale a la\\(s\\):\\s*([0-9]{1,2}:[0-9]{2})[\\s\\S]*?Terminal:\\s*([A-Z0-9 ]+)[\\s\\S]*?Llega a la\\(s\\):\\s*([0-9]{1,2}:[0-9]{2})[\\s\\S]*?Terminal:\\s*([A-Z0-9 ]+)", "i");
+    const m = t.match(r);
+    return m ? {dep:m[1], depT:m[2], arr:m[3], arrT:m[4]} : null;
+  }
+  const flights = fltNums.map(f=>({num:f, info:findFlightInfo(f)}));
+
+  const parts = t.split(/Nombre del pasajero:/i);
+  const perTramo = [];
+  for(let i=1;i<parts.length;i++){
+    const lines = parts[i].split(/\n|»/).map(s=>s.trim()).filter(Boolean);
+    const entries = [];
+    for(const ln of lines){
+      const m = ln.match(/(.+?)\s+([0-9]{1,2}[A-F])\s+([0-9]{10,16})/i);
+      if(m){ entries.push({name:m[1].trim(), seat:m[2].trim(), ticket:m[3].trim()}); }
+    }
+    if(entries.length) perTramo.push(entries);
+  }
+  const ida = perTramo[0]||[];
+  const vuelta = perTramo[1]||[];
+  const map = new Map();
+  for(const e of ida){ map.set(e.name.toLowerCase(), {name:e.name, seatOut:e.seat, seatBack:null, ticket:e.ticket}); }
+  for(const e of vuelta){
+    const k = e.name.toLowerCase();
+    if(map.has(k)) map.get(k).seatBack = e.seat;
+    else map.set(k, {name:e.name, seatOut:null, seatBack:e.seat, ticket:e.ticket});
+  }
+  const pax = Array.from(map.values());
+  return {pnr, flights, pax};
+}
+
+function renderNames(dataArr){
+  namesEl.innerHTML = "";
+  let total = 0;
+  (dataArr||[]).forEach(d => d.pax.forEach(p=>{
+    const s = document.createElement('span'); s.className='pill'; s.textContent = p.name;
+    namesEl.appendChild(s); total++;
+  }));
+  if(!total) namesEl.textContent = "—";
+}
+
+pdfsEl.addEventListener('change', async (e)=>{
+  const files = Array.from(e.target.files||[]);
+  if(!files.length){ set("Sin archivos."); return; }
+  set("Leyendo PDFs…");
+  PDF_TEXTS = [];
+  for(const f of files){
+    try{ PDF_TEXTS.push({name:f.name, text: await readPdfText(f)}); log("✔ " + f.name); }
+    catch{ log("❌ No se pudo leer " + f.name); }
+  }
+  const parsed = PDF_TEXTS.map(o=>({name:o.name, ...extractData(o.text)}));
+  LAST_DATA = parsed;
+  renderNames(parsed);
+  const num = parsed.reduce((a,b)=>a+(b.pax||[]).length,0);
+  set(`Listo. PDFs: ${parsed.length} · Pasajeros detectados: ${num}`);
+  runEl.disabled = num===0;
+});
+
+parseRawBtn.addEventListener('click', ()=>{
+  const text = rawTA.value||"";
+  if(!text.trim()){ alert("Pega texto del PDF primero."); return; }
+  LAST_DATA = [{name:"pegado.txt", ...extractData(text)}];
+  renderNames(LAST_DATA);
+  const num = LAST_DATA.reduce((a,b)=>a+(b.pax||[]).length,0);
+  set(`Desde texto: pasajeros detectados: ${num}`);
+  genFromRawBtn.disabled = num===0;
+});
+
+async function makeZip(dataArr){
+  const zip = new JSZip();
+  const folder = zip.folder("Itinerarios");
+  const { jsPDF } = window.jspdf;
+  const fmt = (document.getElementById('letter').checked) ? 'letter' : 'a4';
+  const exact = document.getElementById('exact').checked;
+
+  for(const d of dataArr){
+    const pnr = d.pnr || "";
+    const flts = d.flights||[];
+    let out = flts[0]?.num || "AM 0000";
+    let ret = flts[1]?.num || "AM 0000";
+    const outInfo = flts[0]?.info || null;
+    const retInfo = flts[1]?.info || null;
+
+    for(const p of d.pax){
+      const doc = new jsPDF({unit:'pt', format:fmt});
+      const W = doc.internal.pageSize.getWidth();
+
+      if(exact){
+        doc.setFillColor(8, 73, 148); doc.rect(0, 0, W, 48, 'F');
+      }
+      if(LOGO_DATA){
+        try{
+          const base64Logo = await new Promise(res=>{
+            const blob = new Blob([LOGO_DATA]); const r = new FileReader();
+            r.onload = ()=>res(r.result); r.readAsDataURL(blob);
+          });
+          doc.addImage(base64Logo, 'PNG', 24, 10, 120, 28);
+        }catch(e){}
+      }
+
+      doc.setFont('helvetica','bold'); doc.setFontSize(10);
+      const bxW = 180, bxH = 36, bxX = W- bxW - 24, bxY = 10;
+      doc.roundedRect(bxX, bxY, bxW, bxH, 6, 6);
+      doc.text('CÓDIGO DE RESERVACIÓN', bxX+10, bxY+16);
+      doc.setFontSize(14); doc.text(pnr || '—', bxX+10, bxY+30);
+
+      doc.setFont('helvetica','bold'); doc.setFontSize(12);
+      let y = 78;
+      doc.text(`Nombre del pasajero: ${p.name}`, 24, y); y += 18;
+      doc.setFont('helvetica','normal'); doc.setFontSize(11);
+      doc.text(`Recibo(s) de boleto(s) electrónico(s): ${p.ticket||'-'}`, 24, y); y += 8;
+
+      doc.setDrawColor(220); doc.line(24, y+10, W-24, y+10); y += 26;
+
+      function tramo(title, num, info, seat){
+        const boxY = y, boxH = 120;
+        if(exact){ doc.setDrawColor(0); doc.roundedRect(24, boxY, W-48, boxH, 6, 6); doc.setFillColor(245,247,250); doc.rect(24, boxY, W-48, 26, 'F'); }
+        else { doc.setDrawColor(220); doc.roundedRect(24, boxY, W-48, boxH, 6, 6); }
+        doc.setFont('helvetica','bold'); doc.setFontSize(11); doc.text(title, 36, boxY+18);
+        doc.setFont('helvetica','normal'); doc.setFontSize(11); doc.text(`AEROMEXICO ${num}`, 36, boxY+40);
+        if(info){
+          doc.text(`Salida: ${info.dep} · Terminal: ${info.depT}`, 36, boxY+58);
+          doc.text(`Llegada: ${info.arr} · Terminal: ${info.arrT}`, 36, boxY+76);
+        }
+        doc.setFont('helvetica','bold');
+        const seatBoxW = 130, seatBoxH = 26, sx = W- seatBoxW - 36, sy = boxY+14;
+        doc.roundedRect(sx, sy, seatBoxW, seatBoxH, 6, 6); doc.text(`Asiento ${seat||'-'}`, sx+14, sy+18);
+        y = boxY + boxH + 14;
+      }
+
+      tramo('Tramo: Ida', out, outInfo, p.seatOut);
+      tramo('Tramo: Regreso', ret, retInfo, p.seatBack);
+
+      const clean = (p.name||'Pasajero').replace(/[\\/:*?"<>|]+/g,'_').replace(/\s+/g,' ').trim();
+      const fname = `${clean}.pdf`;
+      const blob = doc.output('blob'); const arr = await blob.arrayBuffer();
+      folder.file(fname, arr);
+    }
+  }
+  const content = await zip.generateAsync({type:"blob"});
+  saveAs(content, "Itinerarios_por_Pasajero.zip");
+}
+
+document.getElementById('run').addEventListener('click', async ()=>{
+  if(!LAST_DATA){ alert("Primero sube PDFs."); return; }
+  set("Generando ZIP…"); try{ await makeZip(LAST_DATA); log("✅ ZIP descargado."); }catch(e){ console.error(e); log("❌ Error generando ZIP."); }
+});
+
+document.getElementById('genFromRaw').addEventListener('click', async ()=>{
+  if(!LAST_DATA){ alert("Pega texto y detecta primero."); return; }
+  set("Generando ZIP…"); try{ await makeZip(LAST_DATA); log("✅ ZIP descargado."); }catch(e){ console.error(e); log("❌ Error generando ZIP."); }
+});
+
+// habilitar botón run cuando haya datos
+const obs = new MutationObserver(()=>{ runEl.disabled = !(LAST_DATA && LAST_DATA.reduce((a,b)=>a+(b.pax||[]).length,0)>0); });
+obs.observe(namesEl, {childList:true,subtree:true});
+</script>
+</body>
+</html>
